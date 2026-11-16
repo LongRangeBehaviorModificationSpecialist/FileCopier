@@ -24,14 +24,14 @@
     MD5, SHA1, SHA256 (default), SHA384 or SHA512.
 
 .PARAMETER LogPath
-    CSV log file to write. Default: CopyLog_<timestamp>.csv in the current
+    CSV log file to write.  Default: CopyLog_<timestamp>.csv in the current
     directory.
 
 .PARAMETER NoLog
     Do not write a CSV log.
 
 .EXAMPLE
-    .\Copy-Tree.ps1 D:\Photos E:\Backup\Photos -CopyAcl -VerifyHash -LogPath `
+    .\Copy-Files2.ps1 D:\Photos E:\Backup\Photos -CopyAcl -VerifyHash -LogPath `
     E:\Logs\photos.csv
 
     Copies all files from the D:\Photos folder to the E:\Backup\Photos folder,
@@ -39,319 +39,707 @@
     then write a Csv file to the folder specified in the '-LogPath' argument.
 #>
 [CmdletBinding()]
-param(
-    [Parameter(Mandatory, Position = 0)][string]$Source,
-    [Parameter(Mandatory, Position = 1)][string]$Destination,
+param
+(
+    [Parameter(Mandatory, Position = 0)]
+    [string]$Source,
+
+    [Parameter(Mandatory, Position = 1)]
+    [string]$Destination,
+
     [switch]$SkipIdentical,
     [switch]$CopyAcl,
+
+    [Alias("Verify")]
     [switch]$VerifyHash,
-    [ValidateSet('MD5', 'SHA1', 'SHA256', 'SHA384', 'SHA512')][string]$HashAlgorithm = 'SHA256',
+
+    [ValidateSet("MD5", "SHA1", "SHA256", "SHA384", "SHA512")]
+    [string]$HashAlgorithm = "SHA256",
+
     [string]$LogPath,
     [switch]$NoLog
 )
 
-$ErrorActionPreference = 'Stop'
-$sep = [IO.Path]::DirectorySeparatorChar
+$ErrorActionPreference = "Stop"
+$Sep = [IO.Path]::DirectorySeparatorChar
 
-function Resolve-FullPath([string]$Path) {
-    $full = [IO.Path]::GetFullPath($PSCmdlet.GetUnresolvedProviderPathFromPSPath($Path))
-    if ($full -ne [IO.Path]::GetPathRoot($full)) { $full = $full.TrimEnd('\', '/') }
-    $full
+function Resolve-FullPath
+{
+    param
+    (
+        [string]$Path
+    )
+
+    $Full = [IO.Path]::GetFullPath($PSCmdlet.GetUnresolvedProviderPathFromPSPath($Path))
+
+    if ($Full -ne [IO.Path]::GetPathRoot($Full))
+    {
+        $Full = $Full.TrimEnd("\", "/")
+    }
+
+    $Full
 }
 
-$src = Resolve-FullPath $Source
-$dst = Resolve-FullPath $Destination
+$Src = Resolve-FullPath $Source
+$Dst = Resolve-FullPath $Destination
 
-if (-not [IO.Directory]::Exists($src)) { throw "Source directory not found: $src" }
-if ($src -ieq $dst) { throw "Source and destination are the same directory." }
-if ($dst.StartsWith($src.TrimEnd($sep) + $sep, [StringComparison]::OrdinalIgnoreCase)) {
+if (-not [IO.Directory]::Exists($Src))
+{
+    throw "Source directory not found: $Src"
+}
+
+if ($Src -ieq $Dst)
+{
+    throw "Source and destination are the same directory."
+}
+
+if ($Dst.StartsWith($Src.TrimEnd($Sep) + $Sep, [StringComparison]::OrdinalIgnoreCase))
+{
     throw "Destination cannot be inside the source directory."
 }
 
 # ---------- CSV log ----------
-$script:log = $null
-$logFull = $null
-if (-not $NoLog) {
-    if (-not $LogPath) { $LogPath = "CopyLog_{0:yyyyMMdd_HHmmss}.csv" -f (Get-Date) }
-    $logFull = Resolve-FullPath $LogPath
-    if ($logFull.StartsWith($src.TrimEnd($sep) + $sep, [StringComparison]::OrdinalIgnoreCase)) {
-        throw "The log file cannot be inside the source directory: $logFull"
+$Script:Log = $Null
+$LogFull = $Null
+
+if (-not $NoLog)
+{
+    if (-not $LogPath)
+    {
+        $LogPath = [string]::Format("{0:yyyy.MM.dd_HH.mm.ss}_copy_log.csv", (Get-Date))
     }
-    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($logFull))
+
+    $LogFull = Resolve-FullPath $LogPath
+
+    if ($LogFull.StartsWith($Src.TrimEnd($Sep) + $Sep, [StringComparison]::OrdinalIgnoreCase))
+    {
+        Write-Warning "The log file cannot be inside the source directory: $LogFull"
+        exit 1
+    }
+
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($LogFull))
 }
 
-[void][IO.Directory]::CreateDirectory($dst)
+[void][IO.Directory]::CreateDirectory($Dst)
 
-$script:csvSpecial = [char[]]@(',', '"', "`r", "`n")
+$Script:CsvSpecial = [char[]]@(',', '"', "`r", "`n")
 
-function ConvertTo-CsvField($Value) {
-    if ($null -eq $Value) { return '' }
-    $s = [string]$Value
-    if ($s.IndexOfAny($script:csvSpecial) -ge 0) { return '"' + $s.Replace('"', '""') + '"' }
-    $s
+function ConvertTo-CsvField
+{
+    param
+    (
+        [string]$Value
+    )
+
+    if ($Null -eq $Value)
+    {
+        return ""
+    }
+
+    $S = [string]$Value
+
+    if ($S.IndexOfAny($Script:CsvSpecial) -ge 0)
+    {
+        return '"' + $S.Replace('"', '""') + '"'
+    }
+    $S
 }
 
-function Write-LogRow($Type, $Status, $SrcPath, $DstPath, $Size, $Modified, $HashSrc, $HashDst, $HashResult, $AclResult, $Note) {
-    if (-not $script:log) { return }
-    $algo = if ($VerifyHash) { $HashAlgorithm } else { '' }
-    $vals = @([DateTime]::UtcNow.ToString('o'), $Type, $Status, $SrcPath, $DstPath, $Size, $Modified,
-              $algo, $HashSrc, $HashDst, $HashResult, $AclResult, $Note)
-    $parts = [string[]]::new($vals.Count)
-    for ($i = 0; $i -lt $vals.Count; $i++) { $parts[$i] = ConvertTo-CsvField $vals[$i] }
-    $script:log.WriteLine([string]::Join(',', $parts))
+function Write-LogRow
+{
+    param
+    (
+        [string]$Type,
+        [string]$Status,
+        [string]$SrcPath,
+        [string]$DstPath,
+        [string]$Size,
+        [string]$Modified,
+        [string]$HashSrc,
+        [string]$HashDst,
+        [string]$HashResult,
+        [string]$AclResult,
+        [string]$Note
+    )
+
+    if (-not $Script:Log)
+    {
+        return
+    }
+
+    $Algo = if ($VerifyHash)
+    {
+        $HashAlgorithm
+    }
+    else
+    {
+        ""
+    }
+
+    $Vals = @(
+        [DateTime]::UtcNow.ToString("o"),
+        $Type,
+        $Status,
+        $SrcPath,
+        $DstPath,
+        $Size,
+        $Modified,
+        $Algo,
+        $HashSrc,
+        $HashDst,
+        $HashResult,
+        $AclResult,
+        $Note
+    )
+    $Parts = [string[]]::new($Vals.Count)
+
+    for ($I = 0; $I -lt $Vals.Count; $I++)
+    {
+        $Parts[$I] = ConvertTo-CsvField $Vals[$I]
+    }
+    $Script:Log.WriteLine([string]::Join(",", $Parts))
 }
 
-if ($logFull) {
-    # UTF-8 with BOM so Excel reads non-ASCII file names correctly. Other programs can still read the file while it is being written.
-    $script:log = [IO.StreamWriter]::new($logFull, $false, [Text.UTF8Encoding]::new($true))
-    $script:log.WriteLine('TimestampUtc,Type,Status,SourcePath,DestinationPath,SizeBytes,SourceModifiedUtc,HashAlgorithm,SourceHash,DestinationHash,HashResult,AclResult,Note')
+if ($LogFull)
+{
+    # UTF-8 with BOM so Excel reads non-ASCII file names correctly.
+    # Other programs can still read the file while it is being written.
+    $Script:Log = [IO.StreamWriter]::new(
+        $LogFull,
+        $False,
+        [Text.UTF8Encoding]::new($True)
+    )
+    $Script:Log.WriteLine('TimestampUtc,Type,Status,SourcePath,DestinationPath,SizeBytes,SourceModifiedUtc,HashAlgorithm,SourceHash,DestinationHash,HashResult,AclResult,Note')
 }
 
 # ---------- Hashing: one reusable 1 MB buffer and one reusable hasher ----------
-if ($VerifyHash) {
-    $script:hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
+if ($VerifyHash)
+{
+    $Script:Hasher = [Security.Cryptography.IncrementalHash]::CreateHash(
         [Security.Cryptography.HashAlgorithmName]::new($HashAlgorithm))
-    $script:buffer = [byte[]]::new(1MB)
+    $Script:Buffer = [byte[]]::new(1MB)
 }
 
-function Get-StreamHash([string]$Path) {
-    # bufferSize 1 disables FileStream's own buffering; we read in 1 MB chunks ourselves
-    $fs = [IO.FileStream]::new($Path, [IO.FileMode]::Open, [IO.FileAccess]::Read,
-                               [IO.FileShare]::ReadWrite, 1, [IO.FileOptions]::SequentialScan)
-    try {
-        while (($n = $fs.Read($script:buffer, 0, $script:buffer.Length)) -gt 0) {
-            $script:hasher.AppendData($script:buffer, 0, $n)
+function Get-StreamHash
+{
+    param
+    (
+        [string]$Path
+    )
+    # bufferSize 1 disables FileStream's own buffering
+    # We read in 1 MB chunks ourselves
+    $Fs = [IO.FileStream]::new(
+        $Path,
+        [IO.FileMode]::Open,
+        [IO.FileAccess]::Read,
+        [IO.FileShare]::ReadWrite,
+        1,
+        [IO.FileOptions]::SequentialScan
+    )
+    try
+    {
+        while (($N = $Fs.Read($Script:Buffer, 0, $Script:Buffer.Length)) -gt 0)
+        {
+            $Script:Hasher.AppendData($Script:Buffer, 0, $N)
         }
-        [BitConverter]::ToString($script:hasher.GetHashAndReset()).Replace('-', '')
+        [BitConverter]::ToString($Script:Hasher.GetHashAndReset()).Replace("-", "")
     }
-    finally { $fs.Dispose() }
+    finally
+    {
+        $Fs.Dispose()
+    }
 }
 
 # ---------- NTFS security copy ----------
 # PowerShell 5.1 (.NET Framework) exposes GetAccessControl on FileInfo/DirectoryInfo;
 # PowerShell 7 (.NET Core) exposes it through FileSystemAclExtensions instead.
-$script:UseExt = $PSVersionTable.PSVersion.Major -ge 6
+$Script:UseExt = $PSVersionTable.PSVersion.Major -ge 6
 
-# Returns $true if owner+group+DACL were copied, $false if only the DACL was.
-function Copy-Security([string]$From, [string]$To, [bool]$IsDir) {
-    if ($IsDir) { $f = [IO.DirectoryInfo]::new($From); $t = [IO.DirectoryInfo]::new($To) }
-    else        { $f = [IO.FileInfo]::new($From);      $t = [IO.FileInfo]::new($To) }
+# Returns $True if owner+group+DACL were copied, $False if only the DACL was.
+function Copy-Security
+{
+    param
+    (
+        [string]$From,
+        [string]$To,
+        [bool]$IsDir
+    )
 
-    $full = [Security.AccessControl.AccessControlSections]'Access,Owner,Group'
-    $dacl = [Security.AccessControl.AccessControlSections]::Access
-    $lastError = $null
+    if ($IsDir)
+    {
+        $F = [IO.DirectoryInfo]::new($From)
+        $T = [IO.DirectoryInfo]::new($To)
+    }
+    else
+    {
+        $F = [IO.FileInfo]::new($From)
+        $T = [IO.FileInfo]::new($To)
+    }
 
-    foreach ($sections in @($full, $dacl)) {
-        try {
-            $sec = if ($script:UseExt) { [IO.FileSystemAclExtensions]::GetAccessControl($f, $sections) }
-                   else                { $f.GetAccessControl($sections) }
+    $Full = [Security.AccessControl.AccessControlSections]"Access,Owner,Group"
+    $Dacl = [Security.AccessControl.AccessControlSections]::Access
+    $LastError = $Null
+
+    foreach ($Sections in @($Full, $Dacl))
+    {
+        try
+        {
+            $Sec = if ($Script:UseExt)
+            {
+                [IO.FileSystemAclExtensions]::GetAccessControl($F, $Sections)
+            }
+            else
+            {
+                $F.GetAccessControl($Sections)
+            }
 
             # Mark the sections as modified so they are actually written to the target
-            $sec.SetAccessRuleProtection($sec.AreAccessRulesProtected, $true)
-            if ($sections -eq $full) {
-                $sec.SetOwner($sec.GetOwner([Security.Principal.SecurityIdentifier]))
-                $sec.SetGroup($sec.GetGroup([Security.Principal.SecurityIdentifier]))
+            $Sec.SetAccessRuleProtection($Sec.AreAccessRulesProtected, $True)
+            if ($Sections -eq $Full)
+            {
+                $Sec.SetOwner($Sec.GetOwner([Security.Principal.SecurityIdentifier]))
+                $Sec.SetGroup($Sec.GetGroup([Security.Principal.SecurityIdentifier]))
             }
 
-            if ($script:UseExt) { [IO.FileSystemAclExtensions]::SetAccessControl($t, $sec) }
-            else                { $t.SetAccessControl($sec) }
-            return ($sections -eq $full)
+            if ($Script:UseExt)
+            {
+                [IO.FileSystemAclExtensions]::SetAccessControl($T, $Sec)
+            }
+            else
+            {
+                $T.SetAccessControl($Sec)
+            }
+            return ($Sections -eq $Full)
         }
-        catch { $lastError = $_ }
+        catch
+        {
+            $LastError = $_
+        }
     }
-    throw $lastError
+    throw $LastError
 }
+
 
 # Returns "name (1).ext", "name (2).ext", ... for the first unused name
-function Get-UniquePath([string]$Path) {
-    $folder = [IO.Path]::GetDirectoryName($Path)
-    $base   = [IO.Path]::GetFileNameWithoutExtension($Path)
-    $ext    = [IO.Path]::GetExtension($Path)
-    $i = 1
-    do {
-        $candidate = [IO.Path]::Combine($folder, "$base ($i)$ext")
-        $i++
-    } while ([IO.File]::Exists($candidate) -or [IO.Directory]::Exists($candidate))
-    $candidate
+function Get-UniquePath
+{
+    param
+    (
+        [string]$Path
+    )
+
+    $Folder = [IO.Path]::GetDirectoryName($Path)
+    $Base   = [IO.Path]::GetFileNameWithoutExtension($Path)
+    $Ext    = [IO.Path]::GetExtension($Path)
+    $I = 1
+    do
+    {
+        $Candidate = [IO.Path]::Combine($Folder, "$Base ($I)$Ext")
+        $I++
+    } while ([IO.File]::Exists($Candidate) -or [IO.Directory]::Exists($Candidate))
+    $Candidate
 }
 
-$choices = @(
-    [Management.Automation.Host.ChoiceDescription]::new('&Source',  'Overwrite the destination file with the source file')
-    [Management.Automation.Host.ChoiceDescription]::new('&Destination', 'Keep the existing destination file (skip)')
-    [Management.Automation.Host.ChoiceDescription]::new('&Both',    'Keep both; copy source under a new name')
-    [Management.Automation.Host.ChoiceDescription]::new('Source for &All', 'Overwrite for this and all later conflicts')
-    [Management.Automation.Host.ChoiceDescription]::new('Destination for all (&Keep)', 'Skip this and all later conflicts')
+$Choices = @(
+    [Management.Automation.Host.ChoiceDescription]::new(
+        "&Source",
+        "Overwrite the destination file with the source file"
+    )
+    [Management.Automation.Host.ChoiceDescription]::new(
+        "&Destination",
+        "Keep the existing destination file (skip)"
+    )
+    [Management.Automation.Host.ChoiceDescription]::new(
+        "&Both",
+        "Keep both; copy source under a new name"
+    )
+    [Management.Automation.Host.ChoiceDescription]::new(
+        "Source for &All",
+        "Overwrite for this and all later conflicts"
+    )
+    [Management.Automation.Host.ChoiceDescription]::new(
+        "Destination for all (&Keep)",
+        "Skip this and all later conflicts"
+    )
 )
 
-$policy = 'Prompt'     # Prompt | Source | Destination
-$copied = 0; $skipped = 0; $renamed = 0; $failed = 0
-$verified = 0; $mismatch = 0; $aclOk = 0; $aclPartial = 0; $aclFailed = 0
-[long]$bytes = 0
-$clock = [Diagnostics.Stopwatch]::StartNew()
-$lastUpdate = 0
+# Prompt | Source | Destination
+$Policy = "Prompt"
+[int]$Copied = 0
+[int]$Skipped = 0
+[int]$Renamed = 0
+[int]$Failed = 0
+[int]$Verified = 0
+[int]$Mismatch = 0
+[int]$AclOk = 0
+[int]$AclPartial = 0
+[int]$AclFailed = 0
+[long]$Bytes = 0
+$Clock = [Diagnostics.Stopwatch]::StartNew()
+$LastUpdate = 0
 
-$aclDirs = [Collections.Generic.List[string]]::new()   # directories only; far fewer than files
+# Directories only; far fewer than files
+$AclDirs = [Collections.Generic.List[string]]::new()
 
-$stack = [Collections.Generic.Stack[string]]::new()
-$stack.Push($src)
+$Stack = [Collections.Generic.Stack[string]]::new()
+$Stack.Push($Src)
 
-try {
-    while ($stack.Count -gt 0) {
-        $dir = $stack.Pop()
-        $rel = $dir.Substring($src.Length).TrimStart($sep)
-        $targetDir = if ($rel) { [IO.Path]::Combine($dst, $rel) } else { $dst }
+try
+{
+    while ($Stack.Count -gt 0)
+    {
+        $Dir = $Stack.Pop()
+        $Rel = $Dir.Substring($Src.Length).TrimStart($Sep)
+        $TargetDir = if ($Rel)
+        {
+            [IO.Path]::Combine($Dst, $Rel)
+        }
+        else
+        {
+            $Dst
+        }
 
-        try {
-            [void][IO.Directory]::CreateDirectory($targetDir)
-            if ($CopyAcl) { $aclDirs.Add($dir) }   # applied at the end so a restrictive ACL can't block the copy
+        try
+        {
+            [void][IO.Directory]::CreateDirectory($TargetDir)
+            # Applied at the end so a restrictive ACL can't block the copy
+            if ($CopyAcl)
+            {
+                $AclDirs.Add($Dir)
+            }
 
-            # DirectoryInfo.EnumerateFiles streams FileInfo objects (size/date come with the listing)
-            foreach ($f in [IO.DirectoryInfo]::new($dir).EnumerateFiles()) {
-                $file   = $f.FullName
-                $target = [IO.Path]::Combine($targetDir, $f.Name)
-                $status = ''; $aclResult = ''; $hashSrc = ''; $hashDst = ''; $hashResult = ''; $note = ''
+            # DirectoryInfo.EnumerateFiles streams FileInfo objects
+            # (size/date come with the listing)
+            foreach ($F in [IO.DirectoryInfo]::new($Dir).EnumerateFiles())
+            {
+                $File   = $F.FullName
+                $Target = [IO.Path]::Combine($TargetDir, $F.Name)
+                $Status = ""
+                $AclResult = ""
+                $HashSrc = ""
+                $HashDst = ""
+                $HashResult = ""
+                $Note = ""
 
-                try {
-                    $doCopy    = $true
-                    $overwrite = $false
-                    $status    = 'Copied'
-                    $d = [IO.FileInfo]::new($target)
+                try
+                {
+                    $DoCopy    = $True
+                    $Overwrite = $False
+                    $Status    = "Copied"
+                    $D = [IO.FileInfo]::new($Target)
 
-                    if ($d.Exists) {
-                        if ($SkipIdentical -and $f.Length -eq $d.Length -and $f.LastWriteTimeUtc -eq $d.LastWriteTimeUtc) {
-                            $skipped++; $doCopy = $false; $status = 'SkippedIdentical'
+                    if ($D.Exists)
+                    {
+                        if ($SkipIdentical -and $F.Length -eq $D.Length `
+                            -and $F.LastWriteTimeUtc -eq $D.LastWriteTimeUtc)
+                        {
+                            $Skipped++
+                            $DoCopy = $False
+                            $Status = "SkippedIdentical"
                         }
-                        else {
-                            $action = $policy
-                            if ($policy -eq 'Prompt') {
-                                $nl  = [Environment]::NewLine
-                                $msg = "Conflict: $target" + $nl +
-                                       ('  Source:      {0,15:N0} bytes   modified {1}' -f $f.Length, $f.LastWriteTime) + $nl +
-                                       ('  Destination: {0,15:N0} bytes   modified {1}' -f $d.Length, $d.LastWriteTime)
-                                Write-Progress -Activity 'Copying' -Completed
-                                switch ($Host.UI.PromptForChoice('File already exists', $msg, $choices, 1)) {
-                                    0 { $action = 'Source' }
-                                    1 { $action = 'Destination' }
-                                    2 { $action = 'Both' }
-                                    3 { $action = 'Source';      $policy = 'Source' }
-                                    4 { $action = 'Destination'; $policy = 'Destination' }
+                        else
+                        {
+                            $Action = $Policy
+                            if ($Policy -eq "Prompt")
+                            {
+                                $Nl  = [Environment]::NewLine
+                                $Msg = "Conflict: $Target" +
+                                    $Nl +
+                                    ([string]::Format(
+                                        "  Source:      {0,15:N0} bytes   modified {1}",
+                                        $F.Length,
+                                        $F.LastWriteTime
+                                    )) +
+                                    $Nl +
+                                    ([string]::Format(
+                                        "  Destination: {0,15:N0} bytes   modified {1}",
+                                        $D.Length,
+                                        $D.LastWriteTime
+                                    ))
+
+                                Write-Progress -Activity "Copying" -Completed
+
+                                switch ($Host.UI.PromptForChoice("File already exists", $Msg, $Choices, 1))
+                                {
+                                    0 { $Action = "Source" }
+                                    1 { $Action = "Destination" }
+                                    2 { $Action = "Both" }
+                                    3 {
+                                        $Action = "Source"
+                                        $Policy = "Source"
+                                    }
+                                    4 {
+                                        $Action = "Destination"
+                                        $Policy = "Destination"
+                                    }
                                 }
                             }
 
-                            switch ($action) {
-                                'Destination' { $skipped++; $doCopy = $false; $status = 'SkippedKeptDestination' }
-                                'Both'        { $target = Get-UniquePath $target; $renamed++; $status = 'CopiedRenamed' }
-                                'Source'      {
-                                    $overwrite = $true
-                                    $status    = 'Overwritten'
-                                    # clears read-only/hidden/system so the overwrite can succeed
-                                    [IO.File]::SetAttributes($target, [IO.FileAttributes]::Normal)
+                            switch ($Action)
+                            {
+                                "Destination"
+                                {
+                                    $Skipped++
+                                    $DoCopy = $False
+                                    $Status = "SkippedKeptDestination"
+                                }
+                                "Both"
+                                {
+                                    $Target = Get-UniquePath $Target
+                                    $Renamed++
+                                    $Status = "CopiedRenamed"
+                                }
+                                "Source"
+                                {
+                                    $Overwrite = $True
+                                    $Status    = "Overwritten"
+                                    # Clears read-only/hidden/system so the overwrite can succeed
+                                    [IO.File]::SetAttributes($Target, [IO.FileAttributes]::Normal)
                                 }
                             }
                         }
                     }
 
-                    if ($doCopy) {
-                        [IO.File]::Copy($file, $target, $overwrite)
-                        $copied++
-                        $bytes += $f.Length
+                    if ($DoCopy)
+                    {
+                        [IO.File]::Copy($File, $Target, $Overwrite)
+                        $Copied++
+                        $Bytes += $F.Length
 
-                        if ($CopyAcl) {
-                            try {
-                                if (Copy-Security $file $target $false) { $aclOk++; $aclResult = 'Full' }
-                                else                                    { $aclPartial++; $aclResult = 'DaclOnly' }
+                        if ($CopyAcl)
+                        {
+                            try
+                            {
+                                if (Copy-Security -From $File -To $Target -IsDir $False)
+                                {
+                                    $AclOk++
+                                    $AclResult = "Full"
+                                }
+                                else
+                                {
+                                    $AclPartial++
+                                    $AclResult = "DaclOnly"
+                                }
                             }
-                            catch {
-                                $aclFailed++; $aclResult = 'Failed'
-                                $note += "ACL: $($_.Exception.Message) "
-                                Write-Warning "ACL copy failed: $target -> $($_.Exception.Message)"
+                            catch
+                            {
+                                $AclFailed++
+                                $AclResult = "Failed"
+                                $Note += "ACL: $( $_.Exception.Message ) "
+                                Write-Warning "ACL copy failed: $Target => $( $_.Exception.Message )"
                             }
                         }
 
-                        if ($VerifyHash) {
-                            try {
-                                $hashSrc = Get-StreamHash $file
-                                $hashDst = Get-StreamHash $target
-                                if ($hashSrc -ceq $hashDst) { $verified++; $hashResult = 'Match' }
-                                else {
-                                    $mismatch++; $hashResult = 'MISMATCH'
-                                    Write-Warning "HASH MISMATCH: $file`n  source $HashAlgorithm : $hashSrc`n  copy   $HashAlgorithm : $hashDst"
+                        if ($VerifyHash)
+                        {
+                            try
+                            {
+                                $HashSrc = Get-StreamHash $File
+                                $HashDst = Get-StreamHash $Target
+                                if ($HashSrc -ceq $HashDst)
+                                {
+                                    $Verified++
+                                    $HashResult = "Match"
+                                }
+                                else
+                                {
+                                    $Mismatch++
+                                    $HashResult = "MISMATCH"
+                                    Write-Warning "HASH MISMATCH: $File`n  source $HashAlgorithm : $HashSrc`n  copy   $HashAlgorithm : $HashDst"
                                 }
                             }
-                            catch {
-                                $failed++; $hashResult = 'Error'
-                                $note += "Hash: $($_.Exception.Message) "
-                                Write-Warning "Hash failed: $file -> $($_.Exception.Message)"
+                            catch
+                            {
+                                $Failed++
+                                $HashResult = "Error"
+                                $Note += "Hash: $( $_.Exception.Message ) "
+                                Write-Warning "Hash failed: $File => $( $_.Exception.Message )"
                             }
                         }
                     }
                 }
-                catch {
-                    $failed++
-                    $status = 'Failed'
-                    $note  += $_.Exception.Message
-                    Write-Warning "Failed: $file -> $($_.Exception.Message)"
+                catch
+                {
+                    $Failed++
+                    $Status = "Failed"
+                    $Note += $_.Exception.Message
+                    Write-Warning "Failed: $File => $( $_.Exception.Message )"
                 }
 
-                Write-LogRow 'File' $status $file $target $f.Length $f.LastWriteTimeUtc.ToString('o') `
-                             $hashSrc $hashDst $hashResult $aclResult $note.Trim()
+                Write-LogRow `
+                    -Type "File" `
+                    -Status $Status `
+                    -SrcPath $File `
+                    -DstPath $Target `
+                    -Size $F.Length `
+                    -Modified $F.LastWriteTimeUtc.ToString("o") `
+                    -HashSrc $HashSrc `
+                    -HashDst $HashDst `
+                    -HashResult $HashResult `
+                    -AclResult $AclResult `
+                    -Note $Note.Trim()
 
                 # Throttled progress and log flush (per-file calls would be slow)
-                if ($clock.ElapsedMilliseconds - $lastUpdate -ge 500) {
-                    $lastUpdate = $clock.ElapsedMilliseconds
-                    if ($script:log) { $script:log.Flush() }
-                    Write-Progress -Activity 'Copying' -Status ("{0:N0} files, {1:N1} MB  |  {2}" -f $copied, ($bytes / 1MB), $dir)
+                if ($Clock.ElapsedMilliseconds - $LastUpdate -ge 500)
+                {
+                    $LastUpdate = $Clock.ElapsedMilliseconds
+                    if ($Script:Log)
+                    {
+                        $Script:Log.Flush()
+                    }
+                    Write-Progress -Activity "Copying" -Status ([string]::Format(
+                        "{0:N0} files, {1:N1} MB  |  {2}",
+                        $Copied,
+                        ($Bytes / 1MB),
+                        $Dir
+                    ))
                 }
             }
 
-            foreach ($sub in [IO.Directory]::EnumerateDirectories($dir)) {
+            foreach ($Sub in [IO.Directory]::EnumerateDirectories($Dir))
+            {
                 # Skip junctions/symlinks to avoid loops and unintended copies
-                if (([IO.File]::GetAttributes($sub) -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
-                    Write-Warning "Skipping reparse point: $sub"
-                    Write-LogRow 'Directory' 'SkippedReparsePoint' $sub '' '' '' '' '' '' '' ''
+                if (([IO.File]::GetAttributes($Sub) -band [IO.FileAttributes]::ReparsePoint) -ne 0)
+                {
+                    Write-Warning "Skipping reparse point: $Sub"
+                    Write-LogRow `
+                        -Type "Directory" `
+                        -Status "SkippedReparsePoint" `
+                        -SrcPath $Sub `
+                        -DstPath "" `
+                        -Size "" `
+                        -Modified "" `
+                        -HashSrc "" `
+                        -HashDst "" `
+                        -HashResult "" `
+                        -AclResult "" `
+                        -Note ""
                     continue
                 }
-                $stack.Push($sub)
+                $Stack.Push($Sub)
             }
         }
-        catch {
-            $failed++
-            Write-Warning "Failed on directory: $dir -> $($_.Exception.Message)"
-            Write-LogRow 'Directory' 'Failed' $dir $targetDir '' '' '' '' '' '' $_.Exception.Message
+        catch
+        {
+            $Failed++
+            Write-Warning "Failed on directory: $Dir => $( $_.Exception.Message )"
+            Write-LogRow `
+                -Type "Directory" `
+                -Status "Failed" `
+                -SrcPath $Dir `
+                -DstPath $TargetDir `
+                -Size "" `
+                -Modified "" `
+                -HashSrc "" `
+                -HashDst "" `
+                -HashResult "" `
+                -AclResult "" `
+                -Note $_.Exception.Message
         }
     }
 
     # Apply directory ACLs last, deepest first
-    if ($CopyAcl) {
-        Write-Progress -Activity 'Applying directory ACLs' -Status "$($aclDirs.Count) directories"
-        for ($i = $aclDirs.Count - 1; $i -ge 0; $i--) {
-            $sd  = $aclDirs[$i]
-            $rel = $sd.Substring($src.Length).TrimStart($sep)
-            $td  = if ($rel) { [IO.Path]::Combine($dst, $rel) } else { $dst }
-            $aclResult = ''; $note = ''
-            try {
-                if (Copy-Security $sd $td $true) { $aclOk++; $aclResult = 'Full' } else { $aclPartial++; $aclResult = 'DaclOnly' }
+    if ($CopyAcl)
+    {
+        Write-Progress -Activity "Applying directory ACLs" -Status "$( $AclDirs.Count ) directories"
+        for ($I = $AclDirs.Count - 1; $I -ge 0; $I--)
+        {
+            $Sd  = $AclDirs[$I]
+            $Rel = $Sd.Substring($Src.Length).TrimStart($Sep)
+            $Td  = if ($Rel)
+            {
+                [IO.Path]::Combine($Dst, $Rel)
             }
-            catch {
-                $aclFailed++; $aclResult = 'Failed'; $note = $_.Exception.Message
-                Write-Warning "ACL copy failed: $td -> $note"
+            else
+            {
+                $Dst
             }
-            Write-LogRow 'Directory' 'DirectoryAcl' $sd $td '' '' '' '' '' $aclResult $note
+            $AclResult = ""
+            $Note = ""
+            try
+            {
+                if (Copy-Security -From $Sd -To $Td -IsDir $True)
+                {
+                    $AclOk++
+                    $AclResult = "Full"
+                }
+                else
+                {
+                    $AclPartial++
+                    $AclResult = "DaclOnly"
+                }
+            }
+            catch
+            {
+                $AclFailed++
+                $AclResult = "Failed"
+                $Note = $_.Exception.Message
+                Write-Warning "ACL copy failed: $Td => $Note"
+            }
+            Write-LogRow `
+                -Type "Directory" `
+                -Status "DirectoryAcl" `
+                -SrcPath $Sd `
+                -DstPath $Td `
+                -Size "" `
+                -Modified "" `
+                -HashSrc "" `
+                -HashDst "" `
+                -HashResult "" `
+                -AclResult $AclResult `
+                -Note $Note
         }
     }
 }
-finally {
-    if ($script:log) { $script:log.Dispose() }   # flushes and closes, even on Ctrl+C or a fatal error
+finally
+{
+    if ($Script:Log)
+    {
+        # Flushes and closes, even on Ctrl+C or a fatal error
+        $Script:Log.Dispose()
+    }
 }
 
-Write-Progress -Activity 'Copying' -Completed
-Write-Progress -Activity 'Applying directory ACLs' -Completed
-$clock.Stop()
+Write-Progress -Activity "Copying" -Completed
+Write-Progress -Activity "Applying directory ACLs" -Completed
+$Clock.Stop()
 
-"{0:N0} copied ({1:N1} MB), {2:N0} skipped, {3:N0} kept-both, {4:N0} failed in {5:hh\:mm\:ss}" -f `
-    $copied, ($bytes / 1MB), $skipped, $renamed, $failed, $clock.Elapsed
-if ($VerifyHash) { "{0} verification: {1:N0} matched, {2:N0} MISMATCHED" -f $HashAlgorithm, $verified, $mismatch }
-if ($CopyAcl)    { "ACLs: {0:N0} full, {1:N0} DACL-only (owner/group not settable), {2:N0} failed" -f $aclOk, $aclPartial, $aclFailed }
-if ($logFull)    { "Log: $logFull" }
+[string]::Format(
+    "{0:N0} copied ({1:N1} MB), {2:N0} skipped, {3:N0} kept-both, {4:N0} failed in {5:hh\:mm\:ss}",
+    $Copied,
+    ($Bytes / 1MB),
+    $Skipped,
+    $Renamed,
+    $Failed,
+    $Clock.Elapsed
+)
 
-if ($failed -or $mismatch -or $aclFailed) { exit 1 }
+if ($VerifyHash)
+{
+    [string]::Format(
+        "{0} verification: {1:N0} matched, {2:N0} MISMATCHED",
+        $HashAlgorithm,
+        $Verified,
+        $Mismatch
+    )
+}
+
+if ($CopyAcl)
+{
+    [string]::Format(
+        "ACLs: {0:N0} full, {1:N0} DACL-only (owner/group not settable), {2:N0} failed",
+        $AclOk,
+        $AclPartial,
+        $AclFailed
+    )
+}
+
+if ($LogFull)
+{
+    "Log: $LogFull"
+}
+
+if ($Failed -or $Mismatch -or $AclFailed)
+{
+    exit 1
+}

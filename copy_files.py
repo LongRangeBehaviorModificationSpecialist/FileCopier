@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
 
 """
-copy_tree.py - Recursively copy a directory tree (Windows) with low memory use,
+copy_tree.py
+
+Recursively copy a directory tree (Windows) with low memory use,
 per-file conflict prompts, optional NTFS ACL copy, optional hash verification
 and a CSV log.
 
 Usage:
-    python copy_tree.py SOURCE DESTINATION [options]
+    python copy_files.py [-s|--source] SOURCE [-d|--dest] DESTINATION [options]
 
 Examples:
-    python copy_tree.py D:\Photos E:\Backup\Photos --copy-acl --verify-hash
+    python copy_files.py D:\Photos E:\Backup\Photos --copy-acl --verify-hash
 
-    python copy_tree.py D:\Data E:\Backup\Data --verify-hash --hash-algorithm sha512 --log-path E:\Logs\data.csv
+    python copy_files.py D:\Data E:\Backup\Data --verify-hash --hash-algorithm sha512 --log-path E:\Logs\data.csv
 """
 from __future__ import annotations
 
@@ -20,6 +22,7 @@ import csv
 import ctypes
 import hashlib
 import os
+from pathlib import Path
 import shutil
 import stat
 import sys
@@ -57,6 +60,12 @@ COLUMNS = [
 def W(path: str) -> str:
     """Add the \\\\?\\ prefix so paths longer than 260 characters work on
     Windows operating systems.
+
+    Args:
+        path (str): Windows file path.
+
+    Returns:
+        Formatted Windows file path.
     """
     if not IS_WIN or path.startswith("\\\\?\\"):
         return path
@@ -171,7 +180,15 @@ if IS_WIN:
 
 def enable_privileges(names) -> None:
     """Enable privileges (needed to set an arbitrary owner) when running
-    elevated.  Failures are ignored."""
+    elevated.  Failures are ignored.  If not a Windows operating system,
+    then the function immediately returns with no further action taken.
+
+    Args:
+        names: names of privileges to be enabled.
+
+    Returns:
+        None
+    """
     if not IS_WIN:
         return
     token = wintypes.HANDLE()
@@ -209,12 +226,16 @@ def enable_privileges(names) -> None:
 def copy_security(src: str, dst: str) -> bool:
     """Copy owner, group and DACL of target file.
 
+    Args:
+        src (str): source of data to be copied.
+        dst (str): destination to which data will be copied.
+
     Returns:
         True if all three were copied,
         False if only the DACL could be (owner/group not settable).
 
     Raises:
-        OSError on failure.
+        OSError: on failure.
     """
     owner, group, dacl, sd = (ctypes.c_void_p() for _ in range(4))
     rc = advapi32.GetNamedSecurityInfoW(
@@ -274,6 +295,18 @@ def copy_security(src: str, dst: str) -> bool:
 def copy_file(src: str, dst: str, overwrite: bool) -> None:
     """Native CopyFileExW: streams in the kernel, keeps timestamps,
     attributes and alternate data streams.
+
+    Args:
+        src (str): Source path to be copied.
+        dst (str): Path where the file will be copied to.
+        overwrite (bool): whether the destination file should be overwritten.
+
+    Returns:
+        None
+
+    Raises:
+        FileExistsError: When a file exists and the `overwrite` argument was
+            not `True`.
     """
     if IS_WIN:
         flags = 0 if overwrite else COPY_FILE_FAIL_IF_EXISTS
@@ -319,11 +352,14 @@ def file_hash(path: str, algo: str) -> str:
     """Hashes a file.
 
     Args:
-        path (str): Path of the file being hashed
-        algo (str): Hashing algorithm to use
+        path (str): Path of the file being hashed.
+        algo (str): Hashing algorithm to use.
 
     Returns:
-        str: Hash of the target file
+        A string of the hash of the target file.
+
+    Raises:
+        None
     """
     buf = getattr(_tls, "buf", None)
     if buf is None:
@@ -351,13 +387,13 @@ def fmt_utc(ts: float) -> str:
     """Formats a provided timestamp into UTC time.
 
     Args:
-        ts (float): Timestamp
+        ts (float): Timestamp to be formatted.
 
     Returns:
-        str: Timestamp formatted in UTC
+        str: Timestamp formatted in UTC.
 
     Raises:
-        OverflowError, OSError, ValueError
+        OverflowError, OSError, ValueError.
     """
     try:
         return datetime.fromtimestamp(
@@ -368,6 +404,14 @@ def fmt_utc(ts: float) -> str:
 
 
 def fmt_local(ts: float) -> str:
+    """Formats a provided timestamp.
+
+    Args:
+        ts (float): Timestamp to be formatted.
+
+    Returns:
+        str: Formatted timestamp.
+    """
     try:
         return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
     except (OverflowError, OSError, ValueError):
@@ -375,7 +419,18 @@ def fmt_local(ts: float) -> str:
 
 
 def get_unique_path(path: str) -> str:
-    """name (1).ext, name (2).ext, ... for the first unused name."""
+    """Rename a copied file if there is a name conflict.
+
+    If `filename.txt` already exists in the destination path, then it will
+    be renamed to `filename (1).txt for the first unused name (or `filename (2).txt if `filename (1).txt` exists.)
+
+    Args:
+        path (str): File path.
+
+    Returns:
+        (str): Renamed file name.
+
+    """
     folder, fname = os.path.split(path)
     base, ext = os.path.splitext(fname)
     i = 1
@@ -447,6 +502,7 @@ class CsvLog:
 # ------------------------------
 
 class Copier:
+    """Handles the actual copy functions."""
     def __init__(
             self,
             args,
@@ -455,23 +511,36 @@ class Copier:
             log: CsvLog | None,
             progress: Progress
     ) -> None:
-        self.src, self.dst = src, dst
+        """Initializes the instance.
+
+        Args:
+            args (_type_): _description_
+            src (str): Path to directory containing files to be copied.
+            dst (str): Path where the `src` files will be copied to.
+            log (CsvLog | None): Path where the Csv log will be saved.
+            progress (Progress): Will status of the copy operation be shown
+                to stdout.
+        """
+        self.src = src
+        self.dst = dst
         self.skip_identical = args.skip_identical
         self.copy_acl = args.copy_acl
         self.verify = args.verify_hash
         self.algo = args.hash_algorithm
         self.log = log
         self.progress = progress
-        self.policy = "Prompt"          # Prompt | Source | Destination
+        # Prompt | Source | Destination
+        self.policy = "Prompt"
         self.copied = self.skipped = self.renamed = self.failed = 0
         self.verified = self.mismatch = 0
         self.acl_ok = self.acl_partial = self.acl_failed = 0
         self.bytes = 0
-        self.acl_dirs: list[str] = []   # directories only; far fewer than files
+        # Directories only; far fewer than files
+        self.acl_dirs: list[str] = []
         self.last_tick = 0.0
         self.pool: ThreadPoolExecutor | None = None
 
-    # ---- output ----
+    # ---- Output ----
     def warn(self, msg: str) -> None:
         self.progress.clear()
         print("WARNING: " + msg, file=sys.stderr)
@@ -494,7 +563,9 @@ class Copier:
             algo = self.algo.upper() if self.verify else ""
             self.log.row(
                 [
-                    datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+                    datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%S.%fZ"
+                    ),
                     typ,
                     status,
                     src,
@@ -517,7 +588,8 @@ class Copier:
             if self.log:
                 self.log.flush()
             self.progress.update(
-                f"{self.copied:,} files, {self.bytes / 1048576:,.1f} MB  |  {current_dir}"
+                f"{self.copied:,} files, "
+                f"{self.bytes / 1048576:,.1f} MB  |  {current_dir}"
             )
 
     # ---- conflict prompt ----
@@ -525,12 +597,20 @@ class Copier:
         """Returns (action, new_policy). action: Source | Destination | Both."""
         self.progress.clear()
         print(f"\nFile already exists: {target}")
-        print(f"  Source:      {src_st.st_size:15,} bytes   modified {fmt_local(src_st.st_mtime)}")
-        print(f"  Destination: {dst_st.st_size:15,} bytes   modified {fmt_local(dst_st.st_mtime)}")
+        print(
+            f"  Source:      {src_st.st_size:15,} bytes   "
+            f"modified {fmt_local(src_st.st_mtime)}"
+        )
+        print(
+            f"  Destination: {dst_st.st_size:15,} bytes   "
+            f"modified {fmt_local(dst_st.st_mtime)}"
+        )
         while True:
             try:
-                ans = input("[S]ource  [D]estination (default)  [B]oth  Source for [A]ll  "
-                            "Destination for all ([K]eep): ").strip().lower()
+                ans = input(
+                    "[S]ource  [D]estination (default)  [B]oth  "
+                    "Source for [A]ll  Destination for all ([K]eep): "
+                ).strip().lower()
             except EOFError:
                 return "Destination", None
             if ans in ("", "d"):
@@ -624,7 +704,7 @@ class Copier:
                 pass
         self.copy_one(path, target, st, d)
 
-    # ---- one file ----
+    # ---- One file ----
     def copy_one(self, path: str, target: str, st, current_dir: str) -> None:
         status = acl_result = hash_src = hash_dst = hash_result = note = ""
         try:
@@ -633,15 +713,25 @@ class Copier:
 
             if dst_st is not None:
                 if stat.S_ISDIR(dst_st.st_mode):
-                    raise IsADirectoryError("a directory with the same name exists at the destination")
-                if (self.skip_identical and st.st_size == dst_st.st_size
-                        and st.st_mtime_ns == dst_st.st_mtime_ns):
+                    raise IsADirectoryError(
+                        "A directory with the same name exists at "
+                        "the destination"
+                    )
+                if (
+                    self.skip_identical
+                    and st.st_size == dst_st.st_size
+                    and st.st_mtime_ns == dst_st.st_mtime_ns
+                ):
                     self.skipped += 1
                     do_copy, status = False, "SkippedIdentical"
                 else:
                     action = self.policy
                     if action == "Prompt":
-                        action, new_policy = self.ask_conflict(target, st, dst_st)
+                        action, new_policy = self.ask_conflict(
+                            target,
+                            st,
+                            dst_st
+                        )
                         if new_policy:
                             self.policy = new_policy
 
@@ -728,7 +818,7 @@ class Copier:
         )
         self.tick(current_dir)
 
-    # ---- directory ACLs: last, deepest first ----
+    # ---- Directory ACLs: last, deepest first ----
     def apply_dir_acls(self) -> None:
         total = len(self.acl_dirs)
         for n, sd in enumerate(reversed(self.acl_dirs), 1):
@@ -766,57 +856,77 @@ class Copier:
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Recursively copy a directory tree with conflict prompts, "
-        "optional NTFS ACL copy, hash verification and a CSV log."
+        prog="copy_files.py",
+        description=(
+            "Recursively copy a directory tree with conflict prompts, "
+            "optional NTFS ACL copy, hash verification and a CSV log."
+        ),
+        epilog="Written by: mikespon  |  DLU: 16-Nov-2026"
     )
     p.add_argument(
-        "source",
-        help="directory to copy"
+        "-s",
+        "--source",
+        required=True,
+        help="Directory to be copied"
     )
     p.add_argument(
-        "destination",
-        help="destination directory (created if it does not exist)"
+        "-d",
+        "--dest",
+        required=True,
+        help="Destination directory (created if it does not exist)."
     )
     p.add_argument(
         "--skip-identical",
         action="store_true",
-        help="silently skip conflicts where size and last-write time "
-            "already match"
+        help=(
+            "Silently skip conflicts where size and last-write time "
+            "already match."
+        )
     )
     p.add_argument(
         "--copy-acl",
         action="store_true",
-        help="copy NTFS security (DACL, owner, group); falls back to DACL "
-            "only if owner/group cannot be set (run elevated for full fidelity)"
+        help=("Copy NTFS security (DACL, owner, group); falls back to "
+            "DACL only if owner/group cannot be set (run elevated for "
+            "full fidelity)."
+        )
     )
     p.add_argument(
+        "-v",
         "--verify-hash",
         action="store_true",
-        help="hash the source and the copy after each copy and compare"
+        help="Hash the source and the copy after each copy and compare."
     )
     p.add_argument(
+        "-a",
         "--hash-algorithm",
         type=str.lower,
         default="sha256",
         choices=("md5", "sha1", "sha256", "sha384", "sha512")
     )
     p.add_argument(
-        "--log-path",
-        help="CSV log file (default: CopyLog_<timestamp>.csv in the "
-            "current directory)"
+        "--csv",
+        help=(
+            "Path in which to save the log file (default: <current directory>)."
+        ),
+    )
+    p.add_argument(
+        "--csvf",
+        help="Name of csv log file. The current date/time will automatically "
+        "be appended to the start of the file name."
     )
     p.add_argument(
         "--no-log",
         action="store_true",
-        help="do not write a CSV log"
+        help="Do not write a CSV log."
     )
     args = p.parse_args()
 
     if args.copy_acl and not IS_WIN:
-        p.error("--copy-acl is only supported on Windows")
+        p.error("'--copy-acl' is only supported on Windows")
 
     src = os.path.abspath(args.source)
-    dst = os.path.abspath(args.destination)
+    dst = os.path.abspath(args.dest)
     if src != os.path.splitdrive(src)[0] + SEP:
         src = src.rstrip("\\/")
     if dst != os.path.splitdrive(dst)[0] + SEP:
@@ -824,26 +934,33 @@ def main() -> int:
 
     if not os.path.isdir(W(src)):
         p.error(f"source directory not found: {src}")
-    nsrc, ndst = os.path.normcase(src), os.path.normcase(dst)
+    nsrc = os.path.normcase(src)
+    ndst = os.path.normcase(dst)
     if nsrc == ndst:
-        p.error("source and destination are the same directory")
+        p.error("Source and destination are the same directory")
     if ndst.startswith(nsrc.rstrip(SEP) + SEP):
-        p.error("destination cannot be inside the source directory")
+        p.error("Destination cannot be inside the source directory")
 
     log_full = None
     if not args.no_log:
-        log_path = args.log_path or f"CopyLog_{datetime.now():%Y%m%d_%H%M%S}.csv"
+        log_path = Path(args.csv) / f"{datetime.now():%Y.%m.%d_%H.%M.%S}_{args.csvf}.csv"
+
         log_full = os.path.abspath(log_path)
         if os.path.normcase(log_full).startswith(nsrc.rstrip(SEP) + SEP):
             p.error(
-                f"the log file cannot be inside the source directory: "
+                f"The log file cannot be inside the source directory: "
                 f"{log_full}"
             )
         os.makedirs(os.path.dirname(log_full), exist_ok=True)
 
     os.makedirs(W(dst), exist_ok=True)
     if args.copy_acl:
-        enable_privileges(["SeRestorePrivilege", "SeTakeOwnershipPrivilege"])
+        enable_privileges(
+            [
+                "SeRestorePrivilege",
+                "SeTakeOwnershipPrivilege",
+            ]
+        )
 
     log = CsvLog(log_full) if log_full else None
     progress = Progress()
