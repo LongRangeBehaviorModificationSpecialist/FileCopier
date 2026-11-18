@@ -32,8 +32,10 @@ If PowerShell blocks the script, run `Unblock-File .\Copy-Files2.ps1` or start i
 ## Copy-Files2.ps1
 
 ```powershell
-.\Copy-Files2.ps1 [-SourceType|-type <"dir"|"file">] [-Source|-src] <Source> [-Destination|-dest] <Destination>
-                  [-SkipIdentical] [-CopyAcl] [-VerifyHash|-verify] [-HashAlgorithm|-hash <MD5|SHA1|SHA256|SHA512>]
+.\Copy-Files2.ps1 [-SourceType|-type <"dir"|"file">] [-Source|-src] <Source>
+                  [-Destination|-dest] <Destination>
+                  [-SkipIdentical] [-CopyAcl] [-VerifyHash|-verify]
+                  [-HashAlgorithm|-hash <MD5|SHA1|SHA256|SHA512>]
                   [-LogPath|-logp <string>] [-LogFile|-logf <string>] [-NoLog]
 ```
 
