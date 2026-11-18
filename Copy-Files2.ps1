@@ -50,7 +50,7 @@
     Path where the Csv log file will be written.
 
     Default: If no argument is provided, the log file will saved in
-    the current directory.
+    the directory from which the .ps1 script is run.
 
 .PARAMETER LogFile
     Alias: '-logf'
@@ -100,6 +100,9 @@
     folder, the ACL data is skipped, the copied files are not hashed and no
     log file is written.
 
+.NOTES
+    Version 0.2
+
 .LINK
     https://github.com/LongRangeBehaviorModificationSpecialist/FileCopier
 #>
@@ -122,7 +125,7 @@ param
     [Alias("verify")]
     [switch]$VerifyHash,
 
-    [ValidateSet("MD5", "SHA1", "SHA256", "SHA384", "SHA512")]
+    [ValidateSet("MD5", "SHA1", "SHA256", "SHA512")]
     [Alias("hash")]
     [string]$HashAlgorithm = "SHA256",
 
@@ -151,26 +154,29 @@ function Resolve-FullPath
 {
     param
     (
-        [string]$Path
+        [string]$path
     )
 
-    $Full = [IO.Path]::GetFullPath($PSCmdlet.GetUnresolvedProviderPathFromPSPath($Path))
+    $fullPath = [IO.Path]::GetFullPath($PSCmdlet.GetUnresolvedProviderPathFromPSPath($path))
 
-    if ($Full -ne [IO.Path]::GetPathRoot($Full))
+    if ($fullPath -ne [IO.Path]::GetPathRoot($fullPath))
     {
-        $Full = $Full.TrimEnd("\", "/")
+        $fullPath = $fullPath.TrimEnd("\", "/")
     }
 
-    $Full
+    $fullPath
 }
 
 
 $Src = Resolve-FullPath $Source
 $Dst = Resolve-FullPath $Destination
 
-$SrcRoot = $Src       # traversal root: the directory that gets walked
-$DstRoot = $Dst       # traversal target root
-$DstFile = $null      # file mode: final destination file path
+# Traversal root: the directory that gets walked
+$SrcRoot = $Src
+# Traversal target root
+$DstRoot = $Dst
+# File mode: final destination file path
+$DstFile = $null
 
 <#
 If '-dest' names an existing folder, the file lands inside it under its
@@ -238,7 +244,6 @@ if (-not $NoLog)
     {
         Write-Error ("You specified -LogFile '$LogFile' but not -LogPath. " +
             "A custom file name requires an output directory.")
-            exit 1
     }
 
     # Default file name when the user gave a directory but no name
@@ -253,13 +258,27 @@ if (-not $NoLog)
     #>
     if ([IO.Path]::GetFileName($LogFile) -ne $LogFile)
     {
-        Write-Error "-LogFile must be a file name only, not a path.  Put the directory in -LogPath."
-        exit 1
+        Write-Error ("-LogFile must be a file name only, not a path.  Specify the " +
+            "directory using the '-LogPath' parameter.")
     }
 
     if (-not $LogPath)
     {
-        $LogPath = (Get-Location).ProviderPath
+        if ($PSScriptRoot)
+        {
+            <#
+            $PSScriptRoot is populated when the code executes as a .ps1 file, but
+            it's $null/empty if the same code ever gets dot-sourced into a bare
+            console session or run via some hosts that don't set it.  Falling back
+            to Get-Location there means the block never produces a pathless resolve,
+            which Resolve-FullPath would choke on.
+            #>
+            $LogPath = $PSScriptRoot
+        }
+        else
+        {
+            $LogPath = (Get-Location).ProviderPath
+        }
     }
 
     $LogDir = Resolve-FullPath $LogPath

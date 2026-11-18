@@ -5,10 +5,10 @@ copy_tree.py
 
 Recursively copy a directory tree (Windows) with low memory use,
 per-file conflict prompts, optional NTFS ACL copy, optional hash verification
-and a CSV log.
+and a Csv log.
 
 Usage:
-    python copy_files.py [-s|--source] SOURCE [-d|--dest] DESTINATION [options]
+    python copy_files.py [-s|--source] <source> [-d|--dest] <destination>[--skip-identical] [--copy-acl] [-v|--verify-hash] [-a|--hash-algorithm {md5,sha1,sha256,sha512}] [--csv <log folder>] [--csvf <log name>] [--no-log]
 
 Examples:
     python copy_files.py D:\Photos E:\Backup\Photos --copy-acl --verify-hash
@@ -902,7 +902,7 @@ def main() -> int:
         "--hash-algorithm",
         type=str.lower,
         default="sha256",
-        choices=("md5", "sha1", "sha256", "sha384", "sha512")
+        choices=("md5", "sha1", "sha256", "sha512")
     )
     p.add_argument(
         "--csv",
@@ -912,13 +912,13 @@ def main() -> int:
     )
     p.add_argument(
         "--csvf",
-        help="Name of csv log file. The current date/time will automatically "
+        help="Name of Csv log file. The current date/time will automatically "
         "be appended to the start of the file name."
     )
     p.add_argument(
         "--no-log",
         action="store_true",
-        help="Do not write a CSV log."
+        help="Do not write a Csv log."
     )
     args = p.parse_args()
 
@@ -937,9 +937,9 @@ def main() -> int:
     nsrc = os.path.normcase(src)
     ndst = os.path.normcase(dst)
     if nsrc == ndst:
-        p.error("Source and destination are the same directory")
+        p.error("Source and destination are the same directory.")
     if ndst.startswith(nsrc.rstrip(SEP) + SEP):
-        p.error("Destination cannot be inside the source directory")
+        p.error("Destination cannot be inside the source directory.")
 
     log_full = None
     if not args.no_log:
