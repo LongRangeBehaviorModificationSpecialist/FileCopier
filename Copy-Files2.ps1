@@ -578,11 +578,11 @@ try {
             }
 
             foreach ($F in $Files) {
-                $File       = $F.FullName
-                $Target     = [IO.Path]::Combine($TargetDir, $F.Name)
+                $File   = $F.FullName
+                $Target = [IO.Path]::Combine($TargetDir, $F.Name)
                 if ($SourceType -eq "File") {
-                    # Honor a destination file name chosen by the user
-                    $Target     = $DstFile
+                    # Honor the destination file name chosen by the user
+                    $Target = $DstFile
                 }
                 $Status     = ""
                 $AclResult  = ""
