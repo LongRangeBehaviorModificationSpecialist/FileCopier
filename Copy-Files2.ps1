@@ -488,7 +488,7 @@ function Get-UniquePath {
     $Folder = [IO.Path]::GetDirectoryName($Path)
     $Base   = [IO.Path]::GetFileNameWithoutExtension($Path)
     $Ext    = [IO.Path]::GetExtension($Path)
-    $I = 1
+    $I      = 1
     do {
         $Candidate = [IO.Path]::Combine($Folder, "$Base ($I)$Ext")
         $I++
@@ -520,18 +520,18 @@ $Choices = @(
 )
 
 # Prompt | Source | Destination
-$Policy = "Prompt"
-[int]$Copied = 0
-[int]$Skipped = 0
-[int]$Renamed = 0
-[int]$Failed = 0
-[int]$Verified = 0
-[int]$Mismatch = 0
-[int]$AclOk = 0
+$Policy          = "Prompt"
+[int]$Copied     = 0
+[int]$Skipped    = 0
+[int]$Renamed    = 0
+[int]$Failed     = 0
+[int]$Verified   = 0
+[int]$Mismatch   = 0
+[int]$AclOk      = 0
 [int]$AclPartial = 0
-[int]$AclFailed = 0
-[long]$Bytes = 0
-$Clock = [Diagnostics.Stopwatch]::StartNew()
+[int]$AclFailed  = 0
+[long]$Bytes     = 0
+$Clock           = [Diagnostics.Stopwatch]::StartNew()
 [int]$LastUpdate = 0
 
 # Directories only; far fewer than files
