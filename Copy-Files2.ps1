@@ -152,7 +152,7 @@ $Sep = [IO.Path]::DirectorySeparatorChar
 
 
 function Resolve-FullPath {
-    param (
+    param(
         [string]$path
     )
 
