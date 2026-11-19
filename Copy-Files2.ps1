@@ -977,6 +977,6 @@ else {
 $doc = New-Object Windows.Data.Xml.Dom.XmlDocument
 $doc.LoadXml($xml)
 
-$toast = [Windows.UI.Notifications.ToastNotification]::new($doc)
+$toast    = [Windows.UI.Notifications.ToastNotification]::new($doc)
 $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($NotifyType)
 $notifier.show($toast)
