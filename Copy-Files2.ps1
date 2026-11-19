@@ -279,7 +279,11 @@ if (-not $NoLog) {
     $LogName = [IO.Path]::GetFileNameWithoutExtension($LogFile)
     $LogFull = [IO.Path]::Combine(
         $LogDir,
-        [string]::Format("{0:yyyy.MM.dd_HH.mm.ss}_{1}.csv", (Get-Date), $LogName)
+        [string]::Format(
+            "{0:yyyy.MM.dd_HH.mm.ss}_{1}.csv",
+            (Get-Date),
+            $LogName
+        )
     )
 
     <#
@@ -360,6 +364,7 @@ function Write-LogRow {
         $AclResult,
         $Note
     )
+
     $Parts = [string[]]::new($Vals.Count)
 
     for ($I = 0; $I -lt $Vals.Count; $I++) {
@@ -391,6 +396,7 @@ function Get-StreamHash {
     param(
         [string]$Path
     )
+
     # bufferSize 1 disables FileStream's own buffering
     # We read in 1 MB chunks ourselves
     $Fs = [IO.FileStream]::new(
